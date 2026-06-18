@@ -1,6 +1,9 @@
 password = "supersecret123"
 api_key = "abc123xyz"
 
+password = "supersecret123"
+api_key = "abc123xyz"
+
 def login(user_input):
     eval(user_input)
     
