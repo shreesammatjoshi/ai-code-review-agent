@@ -1,7 +1,4 @@
 require('dotenv').config();
-
-process.env.LANGCHAIN_TRACING_V2 = "true";
-
 const express = require('express');
 const webhookRouter = require('./webhook');
 const app = express();
@@ -15,6 +12,7 @@ app.get('/', (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
+
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
