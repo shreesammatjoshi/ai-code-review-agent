@@ -13,67 +13,128 @@ const { aggregateResults }    = require('./nodes/aggregateResults');
 const { generateReport }      = require('./nodes/generateReport');
 const { postToGitHub }        = require('./nodes/postToGitHub');
 
+
+/**
+ * Stop graph if any node returns { error }
+ */
 function shouldContinue(state) {
   return state.error ? END : 'continue';
 }
 
-function routeAfterClassification(state) {
-  if (state.error) return END;
-  const needsLlm = state.classifiedIssues?.llm_queue?.length > 0;
-  return needsLlm ? 'needsAiReview' : 'autoFixOnly';
-}
 
+/**
+ * Build review graph
+ *
+ * Flow:
+ *
+ * extractDiff
+ *      ↓
+ * parseDiff
+ *   ↙      ↘
+ * runAnalysis   syntaxParser
+ *        ↓      ↓
+ *      classifyIssues
+ *             ↓
+ *    deterministicReport
+ *             ↓
+ *        buildPrompt
+ *             ↓
+ *        runLlmReview
+ *             ↓
+ *      aggregateResults
+ *             ↓
+ *       generateReport
+ *             ↓
+ *        postToGitHub
+ */
 function buildReviewGraph() {
   const graph = new StateGraph(ReviewState)
-    .addNode('extractDiff',         extractDiff)
-    .addNode('parseDiff',           parseDiff)
-    .addNode('runAnalysis',         runAnalysis)
-    .addNode('syntaxParser',        syntaxParser)
-    .addNode('classifyIssues',      classifyIssues)
-    .addNode('deterministicReport', deterministicReport)
-    .addNode('buildPrompt',         buildPrompt)
-    .addNode('runLlmReview',        llmReview)
-    .addNode('aggregateResults',    aggregateResults)
-    .addNode('generateReport',      generateReport)
-    .addNode('postToGitHub',        postToGitHub)
 
+    // ============================
+    // Register nodes
+    // ============================
+    .addNode('extractDiff', extractDiff)
+    .addNode('parseDiff', parseDiff)
+    .addNode('runAnalysis', runAnalysis)
+    .addNode('syntaxParser', syntaxParser)
+    .addNode('classifyIssues', classifyIssues)
+    .addNode('deterministicReport', deterministicReport)
+    .addNode('buildPrompt', buildPrompt)
+    .addNode('runLlmReview', llmReview)
+    .addNode('aggregateResults', aggregateResults)
+    .addNode('generateReport', generateReport)
+    .addNode('postToGitHub', postToGitHub)
+
+
+    // ============================
+    // Start
+    // ============================
     .addEdge('__start__', 'extractDiff')
 
+
+    // ============================
+    // Extract diff → Parse diff
+    // ============================
     .addConditionalEdges('extractDiff', shouldContinue, {
       continue: 'parseDiff',
       [END]: END,
     })
 
-    // ONE conditional edge for the error gate
+
+    // ============================
+    // Parallel static analysis
+    // parseDiff → runAnalysis + syntaxParser
+    // ============================
     .addConditionalEdges('parseDiff', shouldContinue, {
       continue: 'runAnalysis',
       [END]: END,
     })
-    // Fan-out via a plain edge — coexists fine with the conditional above
+
     .addEdge('parseDiff', 'syntaxParser')
 
-    .addEdge('runAnalysis',  'classifyIssues')
+
+    // ============================
+    // Wait for BOTH branches
+    // ============================
+    .addEdge('runAnalysis', 'classifyIssues')
     .addEdge('syntaxParser', 'classifyIssues')
 
-    .addConditionalEdges('classifyIssues', routeAfterClassification, {
-      needsAiReview: 'buildPrompt',
-      autoFixOnly:   'deterministicReport',
+
+    // ============================
+    // Sequential pipeline from here
+    // ============================
+
+    // Step 1: classify issues
+    .addConditionalEdges('classifyIssues', shouldContinue, {
+      continue: 'deterministicReport',
       [END]: END,
     })
 
+    // Step 2: deterministic processing
+    .addConditionalEdges('deterministicReport', shouldContinue, {
+      continue: 'buildPrompt',
+      [END]: END,
+    })
+
+    // Step 3: prepare LLM prompt
     .addEdge('buildPrompt', 'runLlmReview')
+
+    // Step 4: LLM review
     .addConditionalEdges('runLlmReview', shouldContinue, {
       continue: 'aggregateResults',
       [END]: END,
     })
 
-    .addEdge('deterministicReport', 'aggregateResults')
+    // Step 5: merge everything
     .addEdge('aggregateResults', 'generateReport')
 
+    // Step 6: create final markdown
     .addConditionalEdges('generateReport', shouldContinue, {
       continue: 'postToGitHub',
       [END]: END,
     })
+
+    // Step 7: post comment
     .addEdge('postToGitHub', END);
 
   return graph.compile();

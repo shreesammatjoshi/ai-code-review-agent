@@ -1,35 +1,36 @@
 async function aggregateResults(state) {
   console.log('🔗 [Node] aggregateResults — merging LLM + static analysis results');
 
-  // Case 1: LLM already reviewed
+  let review = null;
+
+  // Start with LLM review if available
   if (state.llmReview) {
-    return {
-      llmReview: state.llmReview
-    };
+    review = { ...state.llmReview };
   }
 
-  // Case 2: deterministic auto-fix issues found
-  if (state.autoFixReport) {
-    return {
-      llmReview: {
-        verdict: "comment",
-        summary: state.autoFixReport.summary,
-        overall_risk: "medium",
-        positives: [],
-        files: []
-      }
-    };
-  }
-
-  // Case 3: clean PR
-  return {
-    llmReview: {
+  // If no LLM response (fallback)
+  if (!review) {
+    review = {
       verdict: "approved",
       summary: "No issues detected.",
       overall_risk: "low",
       positives: ["Code passed all automated checks."],
       files: []
+    };
+  }
+
+  // Merge deterministic/static issues into summary
+  if (state.autoFixReport) {
+    review.summary += `\n\n⚠️ Additional automated findings: ${state.autoFixReport.summary}`;
+
+    // If auto-fix found issues, downgrade approval
+    if (review.verdict === "approved") {
+      review.verdict = "comment";
     }
+  }
+
+  return {
+    llmReview: review
   };
 }
 
